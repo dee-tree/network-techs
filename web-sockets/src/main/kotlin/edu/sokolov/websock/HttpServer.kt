@@ -1,7 +1,6 @@
 package edu.sokolov.websock
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -9,7 +8,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import mu.KotlinLogging
 import java.io.BufferedReader
 import java.io.Closeable
@@ -20,16 +18,25 @@ import java.io.PrintWriter
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.Path
-import kotlin.io.path.readLines
+import kotlin.io.path.isRegularFile
+import kotlin.io.path.readText
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.DurationUnit
 
 
 class HttpServer internal constructor(private val socket: ServerSocket) : Closeable {
-    constructor(port: Int = 80) : this(ServerSocket(port))
+    constructor(port: Int = 80, opTimeout: Duration = 5000.milliseconds) : this(ServerSocket(port)) {
+        socket.soTimeout = opTimeout.toInt(DurationUnit.MILLISECONDS)
+    }
 
     private lateinit var job: Job
-    private var isClosed = false
-    private var activeConnectionsCount = 0
+    var isClosed = false
+    private set
+
+    private var activeConnectionsCount = AtomicInteger(0)
 
     suspend fun start() = coroutineScope {
         if (isClosed) return@coroutineScope
@@ -40,7 +47,7 @@ class HttpServer internal constructor(private val socket: ServerSocket) : Closea
                 val deferredClient = async { socket.acceptCancellable() }
 
                 val clientConnection = deferredClient.await() ?: break@outer
-                activeConnectionsCount++
+                activeConnectionsCount.incrementAndGet()
                 logger.debug { "Established a connection with a client: ${clientConnection.inetAddress}:${clientConnection.port}" }
                 logger.debug { "Connected clients: $activeConnectionsCount" }
                 handleClient(clientConnection)
@@ -52,35 +59,54 @@ class HttpServer internal constructor(private val socket: ServerSocket) : Closea
     private fun CoroutineScope.handleClient(client: Socket) = launch {
         BufferedReader(InputStreamReader(client.inputStream)).use { istream ->
             PrintWriter(OutputStreamWriter(client.outputStream)).use { out ->
-                val requestPath = readFileRequest(client, istream)
-                println(requestPath)
-                out.println(buildFileAnswer(requestPath))
-//                while (isActive && !client.isClosed) {
-//                    val clientMsg = istream.readLine().toString() ?: break
-//                    println("client msg: ${clientMsg}")
-//                    if (clientMsg == ".") break
-//                }
+                try {
+                    val path = readFileRequest(client, istream)
+                    logger.debug { "Request on file $path received from ${client.inetAddress.hostAddress}:${client.port}" }
+                    if (path.isRegularFile()) {
+                        logger.debug { "Sending response message to ${client.inetAddress.hostAddress}:${client.port}" }
+                        sendResponse(out, path.readText())
+                    } else {
+                        logger.debug { "File $path, requested from ${client.inetAddress.hostAddress}:${client.port}, not found" }
+                        RequestException("Not Found", 404).sendError(out)
+                    }
+                } catch (e: RequestException) {
+                    logger.error { "Exception during reading request from ${client.inetAddress.hostAddress}:${client.port}: $e" }
+                    e.sendError(out)
+                }
             }
         }
+
+        delay(100)
         logger.debug { "Close connection with the client ${client.inetAddress}:${client.port}" }
         client.close()
-        activeConnectionsCount--
+        activeConnectionsCount.decrementAndGet()
     }
 
     private fun CoroutineScope.readFileRequest(client: Socket, istream: BufferedReader): Path {
-        var line = 0
-        var path: Path? = null
-        while (isActive && !client.isClosed && line < 3) {
-            val clientMsg = istream.readLine() ?: break
+        if (!isActive || client.isClosed) throw RequestException("Connection closed")
+        val clientMethodLine = istream.readLine() ?: throw RequestException("No messages were received")
 
-            when (line) {
-                0 -> path = clientMsg.parseMethodLine()
-            }
+        return clientMethodLine.parseMethodLine()
+    }
 
-            line++
-        }
+    private fun RequestException.sendError(out: PrintWriter) {
+        val code = errorCode ?: INTERNAL_SERVER_ERROR_CODE
+        out.println(
+            """
+HTTP/1.1 $code $message
+            """.trimIndent()
+        )
+    }
 
-        return path ?: throw RequestException("")
+    private fun sendResponse(out: PrintWriter, content: String, contentType: String = "text/plain") {
+        out.println(
+            """
+HTTP/1.1 200 OK
+Content-Type: $contentType
+
+$content
+            """.trimIndent()
+        )
     }
 
     override fun close() {
@@ -92,11 +118,11 @@ class HttpServer internal constructor(private val socket: ServerSocket) : Closea
     }
 
     fun stop() = close()
-
-
 }
 
 private val logger = KotlinLogging.logger { }
+
+private const val INTERNAL_SERVER_ERROR_CODE = 500
 
 private fun ServerSocket.acceptCancellable() = try {
     accept()
@@ -125,10 +151,3 @@ private fun String.parseMethodLine(): Path {
 
     return Path(split.subList(1, split.lastIndex).joinToString(" "))
 }
-
-private fun buildFileAnswer(file: Path) = """
-HTTP/1.1 200 OK
-Content-Type: text/html
-
-${file.readLines().joinToString("\n")}
-        """.trimIndent()
