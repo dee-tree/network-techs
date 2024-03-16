@@ -5,4 +5,5 @@ plugins {
 
 rootProject.name = "network-techs"
 include(":web-sockets")
+include(":udp-pinger")
 
