@@ -6,8 +6,9 @@
 # Task 2 - UDP pinger
 [see udp-pinger](./udp-pinger/readme.md)
 
-# Task 3 - SMTP
-**TODO**
+# Task 3 - SMTP client
+[see smtp-client](./smtp-client/readme.md)
+
 
 # Task 4 - proxy server
 
