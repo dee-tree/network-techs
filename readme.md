@@ -9,7 +9,8 @@
 # Task 3 - SMTP client
 [see smtp-client](./smtp-client/readme.md)
 
-
 # Task 4 - proxy server
+[see proxy-server](./proxy/readme.md)
+
 
 # Task 5 - ICMP pinger
