@@ -14,3 +14,8 @@
 
 # Task 5 - ICMP pinger
 [see icmp-pinger](./icmp/readme.md)
+
+*Bonus*: C/C++ implementation for Windows ICMP API:
+[see icmp pinger on C/C++](./icmp-c/readme.md)
+
+
