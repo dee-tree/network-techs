@@ -8,4 +8,5 @@ include(":web-sockets")
 include(":udp-pinger")
 include(":smtp-client")
 include(":proxy")
+include(":icmp")
 
